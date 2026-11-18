@@ -1,0 +1,58 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Versão a partir da tag
+        shell: pwsh
+        run: |
+          $v = "1.0.0"
+          if ($env:GITHUB_REF_TYPE -eq "tag") { $v = $env:GITHUB_REF_NAME.TrimStart('v') }
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publicar (self-contained win-x64)
+        shell: pwsh
+        run: dotnet publish src/ScreenTranslator/ScreenTranslator.csproj -c Release -r win-x64 --self-contained true "-p:Version=$env:VERSION" -o publish
+
+      - name: Instalar Inno Setup (se ausente)
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+
+      - name: Gerar Setup.exe
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$env:VERSION" installer\setup.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Anexar Setup.exe à release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/Setup.exe
+          generate_release_notes: true
+
+      - name: Guardar Setup.exe como artefato (execução manual)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Setup
+          path: installer/Output/Setup.exe
